@@ -35,7 +35,8 @@ import {
   generateProvinceDetail,
   generateProvinceTrend,
 } from '@/utils/mock';
-import { canViewProvince } from '@/utils/permission';
+import { canViewProvince, getProvinceCode, hasPermission } from '@/utils/permission';
+import { BRANDS } from '@/constants/brands';
 
 type MapDimension = 'sales' | 'production' | 'quality';
 
@@ -61,15 +62,47 @@ export default function Dashboard() {
   const [selectedProvince, setSelectedProvince] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
-  const kpiData = useMemo(() => generateKPI(), []);
+  const _kpiData = useMemo(() => generateKPI(), []);
   const allProvinceData = useMemo(() => generateProvinceData(), []);
-  const qualityRank = useMemo(() => generateQualityRank(), []);
-  const trendData = useMemo(() => generateTrendData(7), []);
+  const allQualityRank = useMemo(() => generateQualityRank(), []);
+  const _trendData = useMemo(() => generateTrendData(7), []);
   const _streamData = useMemo(() => generateDataStream(15), []);
+  const userProvinceCode = useMemo(() => getProvinceCode(user), [user]);
+  const isNationalView = useMemo(() => hasPermission(user, 'dashboard:view:all'), [user]);
 
   const provinceRawData = useMemo(() => {
     return allProvinceData.filter((p: any) => canViewProvince(user, p.code));
   }, [allProvinceData, user]);
+
+  const kpiData = useMemo(() => {
+    if (isNationalView) return _kpiData;
+    if (!provinceRawData.length) return _kpiData;
+    const totalProduction = provinceRawData.reduce((s: number, p: any) => s + (typeof p.production === 'object' ? p.production.value : p.production), 0);
+    const totalSales = provinceRawData.reduce((s: number, p: any) => s + (typeof p.sales === 'object' ? p.sales.value : p.sales), 0);
+    const avgQuality = provinceRawData.reduce((s: number, p: any) => s + (typeof p.qualityPassRate === 'object' ? p.qualityPassRate.value : p.qualityPassRate), 0) / provinceRawData.length;
+    const avgInventory = provinceRawData.reduce((s: number, p: any) => s + (typeof p.inventoryDays === 'object' ? p.inventoryDays.value : p.inventoryDays), 0) / provinceRawData.length;
+    const enterprises = provinceRawData.reduce((s: number, p: any) => s + (p.enterpriseCount || 0), 0);
+    const alertsCount = Math.round(enterprises * 0.04);
+    return [
+      { key: 'total_production', label: '总产量', value: String(Math.round(totalProduction / 100)), trend: 3.2, unit: '万千升', icon: 'Factory' },
+      { key: 'total_sales', label: '总销量', value: String(Math.round(totalSales / 100)), trend: 2.8, unit: '万千升', icon: 'ShoppingCart' },
+      { key: 'sales_rate', label: '产销率', value: totalProduction > 0 ? ((totalSales / totalProduction) * 100).toFixed(1) : '0', trend: 1.5, unit: '%', icon: 'TrendingUp' },
+      { key: 'inventory_turnover', label: '库存周转天数', value: String(Math.round(avgInventory)), trend: -1.2, unit: '天', icon: 'Package' },
+      { key: 'quality_pass', label: '质量合格率', value: avgQuality.toFixed(1), trend: 0.6, unit: '%', icon: 'ShieldCheck' },
+      { key: 'alerts', label: '预警数', value: String(alertsCount), trend: -5.0, unit: '条', icon: 'AlertTriangle' }
+    ];
+  }, [_kpiData, isNationalView, provinceRawData]);
+
+  const trendData = useMemo(() => {
+    if (isNationalView || !userProvinceCode) return _trendData;
+    return generateProvinceTrend(userProvinceCode, 7);
+  }, [_trendData, isNationalView, userProvinceCode]);
+
+  const qualityRank = useMemo(() => {
+    if (isNationalView || !userProvinceCode) return allQualityRank;
+    const brandIdsInProvince = new Set(BRANDS.filter(b => b.provinceCode === userProvinceCode).map(b => b.name));
+    return allQualityRank.filter((b: any) => brandIdsInProvince.has(b.name));
+  }, [allQualityRank, isNationalView, userProvinceCode]);
 
   const heatmapData = useMemo(() => {
     return provinceRawData.map((p: any) => ({
@@ -91,6 +124,13 @@ export default function Dashboard() {
       score: typeof b.score === 'string' ? parseFloat(b.score) : b.score,
     }));
   }, [qualityRank]);
+
+  const viewScopeLabel = useMemo(() => {
+    if (isNationalView) return '全国';
+    if (!provinceRawData.length) return '辖区';
+    if (provinceRawData.length === 1) return provinceRawData[0].name;
+    return '辖区';
+  }, [isNationalView, provinceRawData]);
 
   const provinceDetail = useMemo(
     () => (selectedProvince ? generateProvinceDetail(selectedProvince) : null),
@@ -250,7 +290,7 @@ export default function Dashboard() {
                   className="w-4 h-4"
                   style={{ color: '#D4A574' }}
                 />
-                <span>全国产销分布</span>
+                <span>{viewScopeLabel}产销分布</span>
               </div>
             }
             extra={
@@ -328,7 +368,7 @@ export default function Dashboard() {
                 ]}
                 areaFill={true}
                 height={220}
-                title="全国产销率近7天趋势"
+                title={`${viewScopeLabel}产销率近7天趋势`}
               />
             </div>
           </motion.div>

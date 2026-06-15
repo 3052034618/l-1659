@@ -35,14 +35,14 @@ const resolveCityCode = (raw: string | undefined): string | undefined => {
   return undefined;
 };
 
-const getProvinceCode = (user: AnyUser): string | undefined => {
+export const getProvinceCode = (user: AnyUser): string | undefined => {
   if (!user) return undefined;
   if ('provinceCode' in user && user.provinceCode) return user.provinceCode as string;
   if ('region' in user && user.region) return resolveProvinceCode(user.region.province);
   return undefined;
 };
 
-const getCityCode = (user: AnyUser): string | undefined => {
+export const getCityCode = (user: AnyUser): string | undefined => {
   if (!user) return undefined;
   if ('cityCode' in user && user.cityCode) return user.cityCode as string;
   if ('region' in user && user.region) return resolveCityCode(user.region.city);

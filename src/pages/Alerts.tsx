@@ -88,7 +88,6 @@ const STATUS_MAP: Record<string, 'pending' | 'processing' | 'resolved' | 'expire
 export default function Alerts() {
   const { user } = useAuth();
 
-  const stats = useMemo(() => generateAlertStats(), []);
   const [allAlerts, setAllAlerts] = useState<any>(() => generateAlertList(50));
 
   const [filters, setFilters] = useState<FilterState>({
@@ -104,13 +103,6 @@ export default function Alerts() {
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [planForm] = Form.useForm();
-
-  const handleViewDetail = (record: any) => {
-    setSelectedAlert(record);
-    const detail = generateAlertDetail(record.id, record);
-    setAlertDetail(detail);
-    setDrawerOpen(true);
-  };
 
   const filteredAlerts = useMemo(() => {
     return allAlerts.filter((a: any) => {
@@ -143,23 +135,54 @@ export default function Alerts() {
     });
   }, [allAlerts, filters, user]);
 
+  const stats = useMemo(() => {
+    const level1 = filteredAlerts.filter(a => a.level === 'critical' || a.level === 'danger').length;
+    const level2 = filteredAlerts.filter(a => a.level === 'warning' || a.level === 'info').length;
+    const pending = filteredAlerts.filter(a => a.status === 'pending' || a.status === 'processing' || a.status === 'approved').length;
+    const resolved = filteredAlerts.filter(a => a.status === 'resolved' || a.status === 'closed').length;
+    return [
+      { label: '一级预警', value: level1, color: '#EF4444' },
+      { label: '二级预警', value: level2, color: '#F59E0B' },
+      { label: '待处理', value: pending, color: '#3B82F6' },
+      { label: '已解决', value: resolved, color: '#10B981' },
+    ];
+  }, [filteredAlerts]);
+
+  const handleViewDetail = (record: any) => {
+    setSelectedAlert(record);
+    const existing = allAlerts.find((a: any) => a.id === record.id);
+    if (existing?.persistedDetail) {
+      setAlertDetail(existing.persistedDetail);
+    } else {
+      const detail = generateAlertDetail(record.id, record);
+      setAlertDetail(detail);
+    }
+    setDrawerOpen(true);
+  };
+
+  const persistAlertState = (alertId: string, patch: any) => {
+    setAllAlerts((prev: any[]) => prev.map((a: any) => a.id === alertId ? { ...a, ...patch } : a));
+  };
+
   const handleApprovalAction = async (action: 'approve' | 'reject' | 'submit') => {
     setActionLoading(action);
     await new Promise((r) => setTimeout(r, 600));
     if (!selectedAlert) { setActionLoading(null); return; }
 
     const newAlert = { ...selectedAlert };
+    let newDetail = { ...alertDetail };
+
     if (action === 'approve') {
       const currentLevel = newAlert.currentApprovalLevel || 1;
       const nextLevel = currentLevel + 1;
       const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
 
-      const stepNames = ['', '酒企质量总监', '省市场监管局复核', '国家食药监批准'];
+      const stepNames = ['', '酒企质量总监确认', '省市场监管局复核', '国家食药监批准'];
       const stepStatusLabels = ['', '酒企确认', '省局复核中', '国家批准中'];
 
       newAlert.approvalSteps = (newAlert.approvalSteps || []).map((step: any) => {
         if (step.level === currentLevel) {
-          return { ...step, status: 'approved', approverName: user?.name || '当前用户', approvedAt: now, comment: `${stepNames[currentLevel]}审批通过` };
+          return { ...step, status: 'approved', approverName: user?.name || '当前用户', approvedAt: now, comment: `${stepNames[currentLevel]}通过` };
         }
         return step;
       });
@@ -173,29 +196,54 @@ export default function Alerts() {
         newAlert.status = 'processing';
         newAlert.statusLabel = stepStatusLabels[nextLevel];
       }
+
+      newDetail = {
+        ...newDetail,
+        logs: [
+          {
+            time: now,
+            user: user?.name || '当前用户',
+            action: stepNames[currentLevel] + '审批通过',
+            detail: nextLevel > 3 ? '预警处理完成' : `已流转至${stepNames[nextLevel]}`,
+          },
+          ...(newDetail.logs || []),
+        ],
+      };
+
       message.success(nextLevel > 3 ? '最终审批通过，预警已完成处理' : `审批通过，已流转至${stepNames[nextLevel]}`);
     } else if (action === 'reject') {
       const currentLevel = newAlert.currentApprovalLevel || 1;
+      const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
       newAlert.status = 'rejected';
       newAlert.statusLabel = '已驳回';
       newAlert.approvalSteps = (newAlert.approvalSteps || []).map((step: any) => {
         if (step.level === currentLevel) {
-          return { ...step, status: 'rejected', approverName: user?.name || '当前用户' };
+          return { ...step, status: 'rejected', approverName: user?.name || '当前用户', approvedAt: now };
         }
         return step;
       });
+      newDetail = {
+        ...newDetail,
+        logs: [
+          {
+            time: now,
+            user: user?.name || '当前用户',
+            action: '审批驳回',
+            detail: '预警流程终止',
+          },
+          ...(newDetail.logs || []),
+        ],
+      };
       message.success('审批已驳回');
     } else if (action === 'submit') {
       message.success('处理方案已提交');
       setPlanModalOpen(false);
     }
 
-    const newAllAlerts = allAlerts.map((a: any) => a.id === newAlert.id ? newAlert : a);
-    setAllAlerts(newAllAlerts);
-    setSelectedAlert(newAlert);
-
-    const updatedDetail = generateAlertDetail(newAlert.id, newAlert);
-    setAlertDetail(updatedDetail);
+    const patch: any = { ...newAlert, persistedDetail: newDetail };
+    persistAlertState(newAlert.id, patch);
+    setSelectedAlert(patch);
+    setAlertDetail(newDetail);
     setActionLoading(null);
   };
 
