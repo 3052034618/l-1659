@@ -55,7 +55,7 @@ import {
   ALERT_TYPES,
   ALERT_LEVELS,
 } from '@/utils/mock';
-import { canViewProvince, canApprove as canApproveByLevel } from '@/utils/permission';
+import { canViewProvince } from '@/utils/permission';
 import { cn } from '@/lib/utils';
 
 const { RangePicker } = DatePicker;
@@ -86,7 +86,7 @@ const STATUS_MAP: Record<string, 'pending' | 'processing' | 'resolved' | 'expire
 };
 
 export default function Alerts() {
-  const { user, hasPermission } = useAuth();
+  const { user } = useAuth();
 
   const stats = useMemo(() => generateAlertStats(), []);
   const [allAlerts, setAllAlerts] = useState<any>(() => generateAlertList(50));
@@ -100,14 +100,17 @@ export default function Alerts() {
   });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedAlert, setSelectedAlert] = useState<any>(null);
+  const [alertDetail, setAlertDetail] = useState<any>(null);
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [planForm] = Form.useForm();
 
-  const alertDetail = useMemo(
-    () => (selectedAlert ? generateAlertDetail(selectedAlert.id, selectedAlert) : null),
-    [selectedAlert]
-  );
+  const handleViewDetail = (record: any) => {
+    setSelectedAlert(record);
+    const detail = generateAlertDetail(record.id, record);
+    setAlertDetail(detail);
+    setDrawerOpen(true);
+  };
 
   const filteredAlerts = useMemo(() => {
     return allAlerts.filter((a: any) => {
@@ -140,51 +143,59 @@ export default function Alerts() {
     });
   }, [allAlerts, filters, user]);
 
-  const handleViewDetail = (record: any) => {
-    setSelectedAlert(record);
-    setDrawerOpen(true);
-  };
-
   const handleApprovalAction = async (action: 'approve' | 'reject' | 'submit') => {
     setActionLoading(action);
-    await new Promise((r) => setTimeout(r, 900));
-    if (selectedAlert) {
-      const newAlert = { ...selectedAlert };
-      if (action === 'approve') {
-        const nextLevel = (newAlert.currentApprovalLevel || 1) + 1;
-        if (nextLevel > 3) {
-          newAlert.status = 'resolved';
-          newAlert.statusLabel = '已处理';
-        } else {
-          newAlert.currentApprovalLevel = nextLevel;
-          newAlert.status = nextLevel === 2 ? 'approved' : 'processing';
-          newAlert.statusLabel = nextLevel === 2 ? '省局复核中' : '国家批准中';
+    await new Promise((r) => setTimeout(r, 600));
+    if (!selectedAlert) { setActionLoading(null); return; }
+
+    const newAlert = { ...selectedAlert };
+    if (action === 'approve') {
+      const currentLevel = newAlert.currentApprovalLevel || 1;
+      const nextLevel = currentLevel + 1;
+      const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
+
+      const stepNames = ['', '酒企质量总监', '省市场监管局复核', '国家食药监批准'];
+      const stepStatusLabels = ['', '酒企确认', '省局复核中', '国家批准中'];
+
+      newAlert.approvalSteps = (newAlert.approvalSteps || []).map((step: any) => {
+        if (step.level === currentLevel) {
+          return { ...step, status: 'approved', approverName: user?.name || '当前用户', approvedAt: now, comment: `${stepNames[currentLevel]}审批通过` };
         }
-        newAlert.approvalSteps = newAlert.approvalSteps.map((step: any) => {
-          if (step.level === (newAlert.currentApprovalLevel || 1) - 1) {
-            return { ...step, status: 'approved', approverName: user?.name || '当前用户', approvedAt: dayjs().format('YYYY-MM-DD HH:mm:ss') };
-          }
-          return step;
-        });
-        message.success(nextLevel > 3 ? '审批通过，预警已完成处理' : `审批通过，已流转至${nextLevel === 2 ? '省市场监管局' : '国家食药监'}`);
-      } else if (action === 'reject') {
-        newAlert.status = 'rejected';
-        newAlert.statusLabel = '已驳回';
-        newAlert.approvalSteps = newAlert.approvalSteps.map((step: any) => {
-          if (step.level === newAlert.currentApprovalLevel) {
-            return { ...step, status: 'rejected', approverName: user?.name || '当前用户' };
-          }
-          return step;
-        });
-        message.success('审批已驳回');
-      } else if (action === 'submit') {
-        message.success('处理方案已提交');
-        setPlanModalOpen(false);
+        return step;
+      });
+
+      if (nextLevel > 3) {
+        newAlert.status = 'resolved';
+        newAlert.statusLabel = '已解决';
+        newAlert.currentApprovalLevel = 3;
+      } else {
+        newAlert.currentApprovalLevel = nextLevel;
+        newAlert.status = 'processing';
+        newAlert.statusLabel = stepStatusLabels[nextLevel];
       }
-      const newAllAlerts = allAlerts.map((a: any) => a.id === newAlert.id ? newAlert : a);
-      setAllAlerts(newAllAlerts);
-      setSelectedAlert(newAlert);
+      message.success(nextLevel > 3 ? '最终审批通过，预警已完成处理' : `审批通过，已流转至${stepNames[nextLevel]}`);
+    } else if (action === 'reject') {
+      const currentLevel = newAlert.currentApprovalLevel || 1;
+      newAlert.status = 'rejected';
+      newAlert.statusLabel = '已驳回';
+      newAlert.approvalSteps = (newAlert.approvalSteps || []).map((step: any) => {
+        if (step.level === currentLevel) {
+          return { ...step, status: 'rejected', approverName: user?.name || '当前用户' };
+        }
+        return step;
+      });
+      message.success('审批已驳回');
+    } else if (action === 'submit') {
+      message.success('处理方案已提交');
+      setPlanModalOpen(false);
     }
+
+    const newAllAlerts = allAlerts.map((a: any) => a.id === newAlert.id ? newAlert : a);
+    setAllAlerts(newAllAlerts);
+    setSelectedAlert(newAlert);
+
+    const updatedDetail = generateAlertDetail(newAlert.id, newAlert);
+    setAlertDetail(updatedDetail);
     setActionLoading(null);
   };
 
@@ -204,7 +215,11 @@ export default function Alerts() {
 
   const canApproveCurrent = useMemo(() => {
     if (!selectedAlert || isApprovalDone) return false;
-    return canApproveByLevel(user, currentApprovalLevel);
+    const role = user?.role;
+    if (currentApprovalLevel === 1 && role === 'enterprise_qc') return true;
+    if (currentApprovalLevel === 2 && role === 'provincial') return true;
+    if (currentApprovalLevel === 3 && role === 'national') return true;
+    return false;
   }, [selectedAlert, user, currentApprovalLevel, isApprovalDone]);
 
   const canSubmitCurrent = useMemo(() => {
@@ -221,16 +236,17 @@ export default function Alerts() {
   };
 
   const approvalNodes: ApprovalNode[] | undefined = useMemo(() => {
-    if (!alertDetail?.approvals) return undefined;
-    return alertDetail.approvals.map((a: any, idx: number) => ({
+    if (!selectedAlert?.approvalSteps?.length) return undefined;
+    const stepRoleMap: Record<number, string> = { 1: '酒企质量总监', 2: '省市场监管局复核', 3: '国家食药监批准' };
+    return selectedAlert.approvalSteps.map((step: any, idx: number) => ({
       key: `step-${idx}`,
-      title: a.role,
-      status: (a.status as ApprovalStatus) || 'pending',
-      description: a.comment || undefined,
-      operator: a.user,
-      time: a.time || undefined,
+      title: step.roleName || stepRoleMap[step.level] || step.role || `第${step.level}级审批`,
+      status: (step.status as ApprovalStatus) || 'pending',
+      description: step.comment || undefined,
+      operator: step.approverName || (step.status === 'approved' ? step.approverName : '待处理'),
+      time: step.approvedAt || undefined,
     }));
-  }, [alertDetail]);
+  }, [selectedAlert]);
 
   const columns = [
     {
@@ -338,12 +354,11 @@ export default function Alerts() {
     },
     {
       title: '状态',
-      dataIndex: 'status',
       key: 'status',
       width: 110,
-      render: (status: string) => (
-        <StatusTag status={STATUS_MAP[status] || 'pending'} size="sm">
-          {allAlerts.find((a: any) => a.status === status)?.statusLabel || status}
+      render: (_: any, r: any) => (
+        <StatusTag status={STATUS_MAP[r.status] || 'pending'} size="sm">
+          {r.statusLabel || r.status}
         </StatusTag>
       ),
     },

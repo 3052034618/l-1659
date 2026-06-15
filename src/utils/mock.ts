@@ -1032,10 +1032,16 @@ export const generateAlertList = (count: number = 30) => {
     enterprise: a.enterpriseName,
     brand: a.brandName,
     province: a.provinceName,
+    provinceCode: a.provinceCode,
+    cityCode: a.cityCode,
     triggerTime: a.createdAt,
     status: a.status,
     statusLabel: statusLabelMap[a.status] || a.status,
-    statusColor: statusColorMap[a.status] || 'default'
+    statusColor: statusColorMap[a.status] || 'default',
+    currentApprovalLevel: a.currentApprovalLevel || 1,
+    approvalSteps: a.approvalSteps || [],
+    ruleMeta: a.ruleMeta,
+    description: a.description,
   }));
 };
 
@@ -1117,29 +1123,31 @@ export const generateAlertDetail = (alertId: string, alertData?: any) => {
 export const generateForecastByPlan = (targets: Array<{ brandName: string; alcoholDegree: number; targetOutput: number; month: string }>) => {
   const totalTarget = targets.reduce((s, t) => s + t.targetOutput, 0);
   const avgTarget = targets.length > 0 ? totalTarget / targets.length : 5000;
+  const brandCount = new Set(targets.map(t => t.brandName)).size;
+  const highAlcoholCount = targets.filter(t => t.alcoholDegree >= 50).length;
   const days = 90;
   const result: ForecastDay[] = [];
   const start = date().add(1, 'day');
-  let base = avgTarget * 0.8;
-  let inventory = avgTarget * 1.2;
+  const baseSalesRate = avgTarget * 0.03;
+  const productionRate = avgTarget * 0.032;
+  let inventory = avgTarget * 1.5;
 
   for (let i = 0; i < days; i++) {
-    const seasonalFactor = 1 + Math.sin((i + 30) / 45) * 0.15;
-    const targetFactor = 1 + (totalTarget / 50000 - 1) * 0.3;
-    base = roundTo(base * randomFloat(0.97, 1.03) * seasonalFactor * targetFactor);
-    const variance = base * randomFloat(0.08, 0.15);
-    const forecastSales = roundTo(base * randomFloat(0.92, 1.02));
-    const plannedProduction = Math.round(forecastSales * randomFloat(0.98, 1.05));
+    const seasonalFactor = 1 + Math.sin((i + 30) / 45) * 0.12;
+    const weekdayBoost = ((i + start.day()) % 7 < 5) ? 1.0 : 0.7;
+    const forecastSales = Math.round(baseSalesRate * seasonalFactor * weekdayBoost);
+    const plannedProduction = Math.round(productionRate * seasonalFactor * (1 + (totalTarget / 60000 - 1) * 0.15));
     inventory = Math.max(0, inventory + plannedProduction - forecastSales);
+    const variance = forecastSales * 0.12;
 
     result.push({
       date: formatDate(start.add(i, 'day')),
       forecastProduction: plannedProduction,
       forecastSales,
-      forecastRevenue: roundTo(plannedProduction * randomFloat(6, 9)),
-      lowerBound: roundTo(base - variance),
-      upperBound: roundTo(base + variance),
-      confidence: roundTo(randomFloat(82, 97, 1)),
+      forecastRevenue: roundTo(plannedProduction * (6 + highAlcoholCount * 0.5)),
+      lowerBound: Math.max(0, Math.round(forecastSales - variance)),
+      upperBound: Math.round(forecastSales + variance),
+      confidence: roundTo(90 - i * 0.08, 1),
     });
   }
 
@@ -1154,21 +1162,21 @@ export const generateForecastByPlan = (targets: Array<{ brandName: string; alcoh
     totalForecastSales,
     gap,
     avgInventory,
-    safeDays: Math.round(avgInventory / (totalForecastSales / days)),
-    replenishmentPoint: Math.round(avgTarget * 0.7),
-    replenishmentQty: Math.round(avgTarget * 0.9),
-    turnoverRate: roundTo((totalForecastSales / avgInventory) * 4, 1),
+    safeDays: Math.max(1, Math.round(avgInventory / (totalForecastSales / days))),
+    replenishmentPoint: Math.round(avgTarget * 0.6),
+    replenishmentQty: Math.round(gap < 0 ? Math.abs(gap) : avgTarget * 0.8),
+    turnoverRate: roundTo(avgInventory > 0 ? (totalForecastSales / avgInventory) * 4 : 0, 1),
     suggestions: [
-      { priority: '高', text: `根据${targets.length}个品牌的计划产量，建议${gap > 0 ? '适度控量' : '加大生产'}，调整幅度${Math.abs(gap / totalTarget * 100).toFixed(1)}%` },
-      { priority: '高', text: `与经销商签订淡旺季动态备货协议，覆盖${targets.map(t => t.brandName).slice(0, 3).join('、')}等核心品牌` },
-      { priority: '中', text: `引入JIT配送模式降低区域仓库存水位15%，优化${targets.filter(t => t.alcoholDegree >= 50).length}款高度酒周转` },
+      { priority: '高', text: `根据${brandCount}个品牌、${targets.length}条月度计划，建议${gap > 0 ? '适度控量' : '加大生产'}，调整幅度${totalTarget > 0 ? Math.abs(gap / totalTarget * 100).toFixed(1) : '0'}%` },
+      { priority: '高', text: `与经销商签订淡旺季动态备货协议，覆盖${targets.map(t => t.brandName).filter((v, i, a) => a.indexOf(v) === i).slice(0, 3).join('、')}等核心品牌` },
+      { priority: '中', text: `引入JIT配送模式降低区域仓库存水位15%，优化${highAlcoholCount}款高度酒周转` },
       { priority: '中', text: '建立跨区域调拨机制平衡南北供需差异' },
       { priority: '低', text: 'Q3末启动节前促销活动加速库存消化' },
     ],
     gapAnalysis: [
       `未来90天内预计${gap > 0 ? '供给过剩' : '市场缺口'}${Math.abs(gap).toLocaleString()}千升`,
-      `预测平衡日期约在${dayjs().add(Math.abs(gap) / (totalForecastSales / days), 'day').format('YYYY-MM-DD')}`,
-      `${targets.length > 3 ? '多品牌组合' : '单一品牌'}生产计划${gap > 0 ? '建议适度下调' : '需追加产能'}，匹配${targets.map(t => t.alcoholDegree + '°').join('/')}酒精度结构`,
+      `预测平衡日期约在${dayjs().add(avgInventory > 0 ? Math.abs(gap) / (totalForecastSales / days) : 30, 'day').format('YYYY-MM-DD')}`,
+      `${brandCount > 3 ? '多品牌组合' : '单一品牌'}生产计划${gap > 0 ? '建议适度下调' : '需追加产能'}，匹配${targets.map(t => t.alcoholDegree + '°').filter((v, i, a) => a.indexOf(v) === i).join('/')}酒精度结构`,
     ]
   };
 };

@@ -2,6 +2,7 @@ import type { RoleType } from '../constants/config';
 import { ROLES, getRoleDefinition } from '../constants/config';
 import type { User } from '../types';
 import type { UserInfo } from '../router';
+import { PROVINCES } from '../constants/regions';
 
 type AnyUser = User | UserInfo | null | undefined;
 
@@ -17,17 +18,34 @@ const getUserRole = (user: AnyUser): RoleType | undefined => {
   return roleMap[user.role as string] || (user.role as RoleType);
 };
 
+const resolveProvinceCode = (raw: string | undefined): string | undefined => {
+  if (!raw) return undefined;
+  if (/^\d{6}$/.test(raw)) return raw;
+  const found = PROVINCES.find(p => p.name === raw || p.shortName === raw);
+  return found?.code;
+};
+
+const resolveCityCode = (raw: string | undefined): string | undefined => {
+  if (!raw) return undefined;
+  if (/^\d{6}$/.test(raw)) return raw;
+  for (const prov of PROVINCES) {
+    const city = prov.cities.find(c => c.name === raw);
+    if (city) return city.code;
+  }
+  return undefined;
+};
+
 const getProvinceCode = (user: AnyUser): string | undefined => {
   if (!user) return undefined;
-  if ('provinceCode' in user) return user.provinceCode;
-  if ('region' in user && user.region) return user.region.province;
+  if ('provinceCode' in user && user.provinceCode) return user.provinceCode as string;
+  if ('region' in user && user.region) return resolveProvinceCode(user.region.province);
   return undefined;
 };
 
 const getCityCode = (user: AnyUser): string | undefined => {
   if (!user) return undefined;
-  if ('cityCode' in user) return user.cityCode;
-  if ('region' in user && user.region) return user.region.city;
+  if ('cityCode' in user && user.cityCode) return user.cityCode as string;
+  if ('region' in user && user.region) return resolveCityCode(user.region.city);
   return undefined;
 };
 
@@ -51,7 +69,7 @@ export const canViewProvince = (
   const roleDef = getRoleDefinition(role);
   if (!roleDef) return false;
   const userProv = getProvinceCode(user);
-  if (roleDef.permissions.includes('province:view:assigned') || roleDef.permissions.includes('dashboard:view:province')) {
+  if (roleDef.permissions.includes('province:view:assigned') || roleDef.permissions.includes('dashboard:view:province') || roleDef.permissions.includes('dashboard:view:city')) {
     return userProv === provinceCode;
   }
   if (roleDef.permissions.includes('city:view:assigned')) {

@@ -228,15 +228,17 @@ export default function ProductionPlan() {
   const chartData = useMemo(() => {
     const history = Array.from({ length: 30 }, (_, i) => {
       const d = dayjs().subtract(30 - i, 'day');
-      const base = forecastResult.avgInventory * 0.8;
+      const base = forecastResult.avgInventory * 0.6;
+      const seasonal = 1 + Math.sin((i + 30) / 45) * 0.08;
+      const val = Math.round(base * seasonal);
       return {
         date: d.format('MM-DD'),
-        value: Math.round(base * (0.9 + Math.random() * 0.2)),
-        lower: Math.round(base * 0.85),
-        upper: Math.round(base * 1.15),
+        value: val,
+        lower: Math.round(val * 0.88),
+        upper: Math.round(val * 1.12),
       };
     });
-    const forecast = forecastResult.forecastDays.map((f, idx) => ({
+    const forecast = forecastResult.forecastDays.map((f) => ({
       date: dayjs(f.date).format('MM-DD'),
       value: f.forecastSales,
       lower: f.lowerBound,
@@ -261,8 +263,8 @@ export default function ProductionPlan() {
             key: `imported-${idx}`,
             month: String(row['月份'] ?? row['month'] ?? '-'),
             brandName: String(row['品牌'] ?? row['brandName'] ?? '-'),
-            alcoholDegree: Number(row['酒精度'] ?? row['alcoholDegree'] ?? 0),
-            targetOutput: Number(row['目标产量'] ?? row['targetOutput'] ?? 0),
+            alcoholDegree: Number(row['酒精度'] ?? row['酒精度(%)'] ?? row['alcoholDegree'] ?? 0),
+            targetOutput: Number(row['目标产量(千升)'] ?? row['目标产量'] ?? row['产量'] ?? row['targetOutput'] ?? 0),
           }));
           setMonthlyTargets(parsed);
           message.success(`成功解析 ${parsed.length} 条月度产量目标`);
