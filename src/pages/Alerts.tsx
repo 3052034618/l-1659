@@ -55,6 +55,7 @@ import {
   ALERT_TYPES,
   ALERT_LEVELS,
 } from '@/utils/mock';
+import { canViewProvince, canApprove as canApproveByLevel } from '@/utils/permission';
 import { cn } from '@/lib/utils';
 
 const { RangePicker } = DatePicker;
@@ -88,7 +89,7 @@ export default function Alerts() {
   const { user, hasPermission } = useAuth();
 
   const stats = useMemo(() => generateAlertStats(), []);
-  const allAlerts = useMemo(() => generateAlertList(50), []);
+  const [allAlerts, setAllAlerts] = useState<any>(() => generateAlertList(50));
 
   const [filters, setFilters] = useState<FilterState>({
     type: undefined,
@@ -104,12 +105,13 @@ export default function Alerts() {
   const [planForm] = Form.useForm();
 
   const alertDetail = useMemo(
-    () => (selectedAlert ? generateAlertDetail(selectedAlert.id) : null),
+    () => (selectedAlert ? generateAlertDetail(selectedAlert.id, selectedAlert) : null),
     [selectedAlert]
   );
 
   const filteredAlerts = useMemo(() => {
     return allAlerts.filter((a: any) => {
+      if (!canViewProvince(user, a.provinceCode)) return false;
       if (filters.type && a.type !== filters.type) return false;
       if (filters.level !== undefined && a.level !== filters.level) {
         const isLevel1 = a.level === 'critical' || a.level === 'danger';
@@ -136,7 +138,7 @@ export default function Alerts() {
       }
       return true;
     });
-  }, [allAlerts, filters]);
+  }, [allAlerts, filters, user]);
 
   const handleViewDetail = (record: any) => {
     setSelectedAlert(record);
@@ -146,15 +148,44 @@ export default function Alerts() {
   const handleApprovalAction = async (action: 'approve' | 'reject' | 'submit') => {
     setActionLoading(action);
     await new Promise((r) => setTimeout(r, 900));
+    if (selectedAlert) {
+      const newAlert = { ...selectedAlert };
+      if (action === 'approve') {
+        const nextLevel = (newAlert.currentApprovalLevel || 1) + 1;
+        if (nextLevel > 3) {
+          newAlert.status = 'resolved';
+          newAlert.statusLabel = '已处理';
+        } else {
+          newAlert.currentApprovalLevel = nextLevel;
+          newAlert.status = nextLevel === 2 ? 'approved' : 'processing';
+          newAlert.statusLabel = nextLevel === 2 ? '省局复核中' : '国家批准中';
+        }
+        newAlert.approvalSteps = newAlert.approvalSteps.map((step: any) => {
+          if (step.level === (newAlert.currentApprovalLevel || 1) - 1) {
+            return { ...step, status: 'approved', approverName: user?.name || '当前用户', approvedAt: dayjs().format('YYYY-MM-DD HH:mm:ss') };
+          }
+          return step;
+        });
+        message.success(nextLevel > 3 ? '审批通过，预警已完成处理' : `审批通过，已流转至${nextLevel === 2 ? '省市场监管局' : '国家食药监'}`);
+      } else if (action === 'reject') {
+        newAlert.status = 'rejected';
+        newAlert.statusLabel = '已驳回';
+        newAlert.approvalSteps = newAlert.approvalSteps.map((step: any) => {
+          if (step.level === newAlert.currentApprovalLevel) {
+            return { ...step, status: 'rejected', approverName: user?.name || '当前用户' };
+          }
+          return step;
+        });
+        message.success('审批已驳回');
+      } else if (action === 'submit') {
+        message.success('处理方案已提交');
+        setPlanModalOpen(false);
+      }
+      const newAllAlerts = allAlerts.map((a: any) => a.id === newAlert.id ? newAlert : a);
+      setAllAlerts(newAllAlerts);
+      setSelectedAlert(newAlert);
+    }
     setActionLoading(null);
-    message.success(
-      action === 'approve'
-        ? '审批通过成功'
-        : action === 'reject'
-        ? '已驳回审批'
-        : '方案已提交'
-    );
-    if (action === 'submit') setPlanModalOpen(false);
   };
 
   const resetFilters = () => {
@@ -167,15 +198,27 @@ export default function Alerts() {
     });
   };
 
-  const canApprove =
-    hasPermission('alerts:approve') ||
-    user?.role === 'national' ||
-    user?.role === 'provincial' ||
-    user?.role === 'municipal';
-  const canSubmit =
-    hasPermission('alerts:handle') ||
-    user?.role === 'enterprise_qc' ||
-    user?.role === 'enterprise_prod';
+  const currentApprovalLevel = selectedAlert?.currentApprovalLevel || 1;
+  const alertStatus = selectedAlert?.status;
+  const isApprovalDone = alertStatus === 'resolved' || alertStatus === 'rejected' || alertStatus === 'closed';
+
+  const canApproveCurrent = useMemo(() => {
+    if (!selectedAlert || isApprovalDone) return false;
+    return canApproveByLevel(user, currentApprovalLevel);
+  }, [selectedAlert, user, currentApprovalLevel, isApprovalDone]);
+
+  const canSubmitCurrent = useMemo(() => {
+    if (!selectedAlert || isApprovalDone) return false;
+    const isEnterpriseUser = user?.role === 'enterprise_qc' || user?.role === 'enterprise_prod';
+    return isEnterpriseUser && currentApprovalLevel === 1;
+  }, [selectedAlert, user, currentApprovalLevel, isApprovalDone]);
+
+  const getApproveButtonText = () => {
+    if (currentApprovalLevel === 1) return '确认并上报';
+    if (currentApprovalLevel === 2) return '复核通过';
+    if (currentApprovalLevel === 3) return '最终批准';
+    return '审批通过';
+  };
 
   const approvalNodes: ApprovalNode[] | undefined = useMemo(() => {
     if (!alertDetail?.approvals) return undefined;
@@ -723,6 +766,24 @@ export default function Alerts() {
                       {selectedAlert.levelLabel}
                     </span>
                   </Descriptions.Item>
+                  <Descriptions.Item label="触发天数">
+                    <span style={{ color: '#F59E0B', fontWeight: 600 }}>
+                      {alertDetail.ruleMeta?.exceededDays || '-'} 天
+                    </span>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="触发条件">
+                    连续{alertDetail.ruleMeta?.triggerDays || '-'}天超阈值
+                  </Descriptions.Item>
+                  <Descriptions.Item label="当前指标">
+                    <span style={{ color: '#EF4444', fontWeight: 600 }}>
+                      {alertDetail.ruleMeta?.currentValue || '-'} {alertDetail.ruleMeta?.unit || ''}
+                    </span>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="阈值">
+                    <span style={{ color: '#3B82F6', fontWeight: 600 }}>
+                      {alertDetail.ruleMeta?.threshold || '-'} {alertDetail.ruleMeta?.unit || ''}
+                    </span>
+                  </Descriptions.Item>
                   <Descriptions.Item label="所属企业">{selectedAlert.enterprise}</Descriptions.Item>
                   <Descriptions.Item label="涉及品牌">{selectedAlert.brand}</Descriptions.Item>
                   <Descriptions.Item label="所属地区">{selectedAlert.province}</Descriptions.Item>
@@ -830,11 +891,9 @@ export default function Alerts() {
                 layout="horizontal"
                 height={280}
               />
-              {selectedAlert.status !== 'resolved' &&
-                selectedAlert.status !== 'rejected' &&
-                selectedAlert.status !== 'closed' && (
+              {!isApprovalDone && (
                   <div className="mt-4 flex flex-wrap gap-3 justify-end">
-                    {canSubmit && (
+                    {canSubmitCurrent && (
                       <Button
                         icon={<FileText className="w-4 h-4" />}
                         onClick={() => setPlanModalOpen(true)}
@@ -850,7 +909,7 @@ export default function Alerts() {
                         提交处理方案
                       </Button>
                     )}
-                    {canApprove && (
+                    {canApproveCurrent && (
                       <>
                         <Button
                           danger
@@ -875,7 +934,7 @@ export default function Alerts() {
                             boxShadow: '0 4px 12px -2px rgba(16, 185, 129, 0.4)',
                           }}
                         >
-                          审批通过
+                          {getApproveButtonText()}
                         </Button>
                       </>
                     )}

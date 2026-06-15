@@ -1,5 +1,6 @@
 import { PROVINCES, getProvinceByCode, getCitiesByProvinceCode } from '../constants/regions';
 import { BRANDS, QUALITY_ISSUE_TYPES, getBrandById } from '../constants/brands';
+import dayjs from 'dayjs';
 import type { RoleType } from '../constants/config';
 import { getRoleName } from '../constants/config';
 import { randomInt, randomFloat, randomPick, randomSample, roundTo } from './number';
@@ -244,25 +245,30 @@ export const generateQualityIssues = (count: number = 5): QualityIssue[] => {
   return issues;
 };
 
-export const generateApprovalSteps = (alertId: string, currentLevel: number): ApprovalStep[] => {
+export const generateApprovalSteps = (alertId: string, currentLevel: number, status?: AlertStatus): ApprovalStep[] => {
+  const stepDefinitions = [
+    { level: 1, role: 'quality_inspector', roleName: '酒企质量总监', action: '确认' },
+    { level: 2, role: 'province_manager', roleName: '省市场监管局', action: '复核' },
+    { level: 3, role: 'national_manager', roleName: '国家食药监', action: '批准' },
+  ];
   const steps: ApprovalStep[] = [];
-  const levels = 2;
-  for (let i = 1; i <= levels; i++) {
-    const isDone = i < currentLevel;
-    const isCurrent = i === currentLevel;
+  for (const def of stepDefinitions) {
+    const isDone = def.level < currentLevel;
+    const isCurrent = def.level === currentLevel && status !== 'resolved' && status !== 'closed' && status !== 'rejected';
+    const isRejected = status === 'rejected';
     steps.push({
       id: genId('step'),
       alertId,
-      level: i,
-      approverId: genId('user'),
-      approverName: isDone || isCurrent
+      level: def.level,
+      approverId: isDone ? genId('user') : '',
+      approverName: isDone
         ? randomPick(['张总监', '李经理', '王主任', '赵总'])
-        : '待审批',
-      approverRole: isDone || isCurrent
-        ? getRoleName(i === 1 ? 'province_manager' : 'national_manager')
-        : '',
-      status: isDone ? 'approved' : isCurrent ? 'pending' : 'pending',
-      comment: isDone ? randomPick(['同意', '情况属实，同意处理方案', '审批通过', '按方案执行']) : undefined,
+        : isCurrent
+          ? '待处理'
+          : '待审批',
+      approverRole: def.roleName,
+      status: isDone ? 'approved' : isRejected ? 'rejected' : isCurrent ? 'pending' : 'pending',
+      comment: isDone ? randomPick(['情况属实，报请上级审批', '同意处理方案，转省局复核', '批准启动限产措施', '按方案执行']) : undefined,
       createdAt: formatDateTime(randomDateTime(date().subtract(30, 'day'), date())),
       approvedAt: isDone ? formatDateTime(randomDateTime(date().subtract(15, 'day'), date())) : undefined,
     });
@@ -309,25 +315,54 @@ export const generateActionPlans = (alertId: string, count: number = 1): ActionP
   return plans;
 };
 
+export interface AlertRuleMeta {
+  triggerDays: number;
+  threshold: number;
+  currentValue: number;
+  unit: string;
+  exceededDays: number;
+}
+
 export const generateAlerts = (count: number = 18): Alert[] => {
-  const types: AlertType[] = ['quality', 'production', 'inventory', 'sales', 'satisfaction', 'compliance'];
-  const levels: AlertLevel[] = ['info', 'warning', 'danger', 'critical'];
+  const types: AlertType[] = ['quality', 'inventory'];
   const statuses: AlertStatus[] = ['pending', 'approved', 'processing', 'resolved', 'rejected', 'closed'];
   const alerts: Alert[] = [];
 
   for (let i = 0; i < count; i++) {
     const type = randomPick(types);
-    const level = type === 'quality' || type === 'compliance'
-      ? randomPick(['warning', 'danger', 'critical'] as AlertLevel[])
-      : randomPick(levels);
-    const status = randomPick(statuses);
     const province = randomPick(PROVINCES);
     const cities = getCitiesByProvinceCode(province.code);
     const city = cities.length > 0 ? randomPick(cities) : undefined;
     const brand = randomPick(BRANDS);
-    const threshold = randomInt(50, 200);
-    const indicator = roundTo(threshold * randomFloat(1.05, 2.5));
+
+    let threshold = 0;
+    let indicator = 0;
+    let triggerDays = 0;
+    let exceededDays = 0;
+    let isLevel2 = false;
+
+    if (type === 'inventory') {
+      threshold = 120;
+      indicator = roundTo(randomFloat(125, 180), 1);
+      triggerDays = 7;
+      exceededDays = randomInt(7, 25);
+      isLevel2 = exceededDays > 15;
+    } else {
+      threshold = 3.0;
+      indicator = roundTo(randomFloat(3.1, 8.5), 2);
+      triggerDays = 1;
+      exceededDays = randomInt(1, 25);
+      isLevel2 = exceededDays > 15;
+    }
+
+    const level: AlertLevel = isLevel2 ? 'warning' : 'danger';
+    const level1Statuses: AlertStatus[] = ['pending', 'processing', 'resolved', 'closed'];
+    const status = isLevel2 ? randomPick(statuses) : randomPick(level1Statuses);
     const currentLevel = status === 'pending' ? 1 : status === 'approved' || status === 'processing' ? 2 : 3;
+
+    const ruleDesc = type === 'inventory'
+      ? `库存连续${exceededDays}天超过安全水位${roundTo(indicator - 100, 1)}%`
+      : `质量抽检不合格率${indicator}%，超过阈值${threshold}%`;
 
     alerts.push({
       id: genId('alert'),
@@ -336,8 +371,8 @@ export const generateAlerts = (count: number = 18): Alert[] => {
       typeName: getAlertTypeName(type),
       level,
       status,
-      title: `${level === 'critical' ? '【紧急】' : level === 'danger' ? '【重要】' : ''}${province.shortName}${getAlertTypeName(type)}`,
-      description: `${province.name}${city?.name || ''}区域${getAlertTypeName(type)}，指标${indicator}超出阈值${threshold}，偏差${roundTo(((indicator - threshold) / threshold) * 100)}%。请相关人员及时处理。`,
+      title: `${isLevel2 ? '【二级】' : '【一级】'}${province.shortName}${brand.name}${getAlertTypeName(type)}`,
+      description: `${province.name}${city?.name || ''}区域${brand.name}品牌${ruleDesc}，触发${isLevel2 ? '二级' : '一级'}预警。${isLevel2 ? '已超过15天未改善，请立即启动三级审批流程。' : '请质量总监及时处理。'}`,
       provinceCode: province.code,
       provinceName: province.name,
       cityCode: city?.code,
@@ -349,22 +384,26 @@ export const generateAlerts = (count: number = 18): Alert[] => {
       indicatorValue: indicator,
       thresholdValue: threshold,
       deviation: roundTo(((indicator - threshold) / threshold) * 100),
-      riskScore: roundTo(level === 'critical' ? randomFloat(85, 100)
-        : level === 'danger' ? randomFloat(65, 85)
-        : level === 'warning' ? randomFloat(40, 65)
-        : randomFloat(15, 40), 1),
-      createdAt: formatDateTime(randomDateTime(date().subtract(60, 'day'), date())),
-      createdBy: randomPick(['系统自动检测', '张经理', '李主任', '王主管']),
+      riskScore: roundTo(isLevel2 ? randomFloat(75, 95) : randomFloat(45, 75), 1),
+      createdAt: formatDateTime(date().subtract(exceededDays, 'day')),
+      createdBy: '系统自动检测',
       approvedAt: status !== 'pending' ? formatDateTime(randomDateTime(date().subtract(30, 'day'), date())) : undefined,
       resolvedAt: status === 'resolved' || status === 'closed'
         ? formatDateTime(randomDateTime(date().subtract(15, 'day'), date())) : undefined,
       closedAt: status === 'closed' ? formatDateTime(randomDateTime(date().subtract(7, 'day'), date())) : undefined,
       qualityIssues: type === 'quality' ? generateQualityIssues(randomInt(1, 3)) : undefined,
-      approvalSteps: generateApprovalSteps(genId('alert'), currentLevel),
+      approvalSteps: generateApprovalSteps(genId('alert'), currentLevel, status),
       currentApprovalLevel: currentLevel,
       actionPlans: status !== 'pending' && status !== 'rejected' ? generateActionPlans(genId('alert'), randomInt(1, 2)) : undefined,
       relatedAlerts: [],
-    });
+      ruleMeta: {
+        triggerDays,
+        threshold,
+        currentValue: indicator,
+        unit: type === 'inventory' ? '%' : '%',
+        exceededDays
+      }
+    } as any);
   }
   return alerts.sort((a, b) => date(b.createdAt).valueOf() - date(a.createdAt).valueOf());
 };
@@ -911,11 +950,12 @@ export const generateDataStream = (count: number = 15) => {
   }));
 };
 
-export const generateProvinceDetail = (_name: string) => {
+export const generateProvinceDetail = (provinceCode: string) => {
   const provinces = generateProvinceData();
-  const p = randomPick(provinces);
+  const p = provinces.find((x: any) => x.code === provinceCode) || randomPick(provinces);
   return {
     name: p.name,
+    code: p.code,
     production: p.production.value,
     sales: p.sales.value,
     qualityRate: String(p.qualityPassRate.value),
@@ -935,6 +975,23 @@ export const generateProvinceDetail = (_name: string) => {
       { name: '杂醇油偏高', value: randomInt(5, 60) }
     ]
   };
+};
+
+export const generateProvinceTrend = (provinceCode: string, days: number = 7) => {
+  const province = getProvinceByCode(provinceCode);
+  const baseFactor = province ? (province.code.startsWith('52') ? 1.3 : province.code.startsWith('51') ? 1.2 : 1) : 1;
+  const dates: string[] = getLastNDays(days);
+  const sales: number[] = [];
+  const production: number[] = [];
+  const rate: number[] = [];
+  for (let i = 0; i < days; i++) {
+    const baseS = Math.round(randomInt(80, 180) * baseFactor);
+    const baseP = Math.round(randomInt(90, 200) * baseFactor);
+    sales.push(baseS);
+    production.push(baseP);
+    rate.push(roundTo(randomFloat(88, 98), 1));
+  }
+  return { dates: dates.map(d => d.slice(5)), sales, production, rate };
 };
 
 export const generateAlertStats = () => {
@@ -982,31 +1039,136 @@ export const generateAlertList = (count: number = 30) => {
   }));
 };
 
-export const generateAlertDetail = (_alertId: string) => {
-  const dates = getLastNDays(30);
-  const threshold = 1.0;
-  const metrics = dates.map(d => ({
-    date: d.slice(5),
-    value: roundTo(randomFloat(0.5, 1.5), 3),
-    threshold
-  }));
+export const generateAlertDetail = (alertId: string, alertData?: any) => {
+  const type = alertData?.type || randomPick(['quality', 'inventory']);
+  const isLevel2 = alertData?.level === 'warning' || (alertData?.ruleMeta && alertData.ruleMeta.exceededDays > 15);
+  const exceededDays = alertData?.ruleMeta?.exceededDays || randomInt(1, 25);
+
+  let threshold = type === 'inventory' ? 120 : 3.0;
+  if (alertData?.thresholdValue) threshold = alertData.thresholdValue;
+
+  const metrics = getLastNDays(30).map((d, idx) => {
+    const daysAgo = 29 - idx;
+    let value = 0;
+    if (type === 'inventory') {
+      value = daysAgo > exceededDays
+        ? roundTo(randomFloat(100, 118), 1)
+        : roundTo(randomFloat(threshold + 1, threshold * 1.5), 1);
+    } else {
+      value = daysAgo > exceededDays
+        ? roundTo(randomFloat(0.5, 2.8), 2)
+        : roundTo(randomFloat(threshold + 0.1, threshold * 2.5), 2);
+    }
+    return {
+      date: d.slice(5),
+      value,
+      threshold
+    };
+  });
+
+  const currentApprovalLevel = alertData?.currentApprovalLevel || 1;
+  const alertStatus = alertData?.status || 'pending';
+
+  const approvalRoles = [
+    { role: '酒企质量总监', level: 1 },
+    { role: '省市场监管局复核', level: 2 },
+    { role: '国家食药监批准', level: 3 },
+  ];
+
+  const approvals = approvalRoles.map((def, idx) => {
+    const isDone = def.level < currentApprovalLevel;
+    const isCurrent = def.level === currentApprovalLevel && alertStatus !== 'resolved' && alertStatus !== 'closed' && alertStatus !== 'rejected';
+    return {
+      role: def.role,
+      user: isDone ? randomPick(['张总监', '李经理', '王处长', '赵主任']) : (isCurrent ? '待处理' : '待审批'),
+      time: isDone ? formatDateTime(randomDateTime(date().subtract(3, 'day'), date().subtract(1, 'day'))).slice(0, 16) : null,
+      status: isDone ? 'approved' : (alertStatus === 'rejected' ? 'rejected' : isCurrent ? 'pending' : 'pending'),
+      comment: isDone ? randomPick(['情况属实，报请上级审批', '同意处理方案，转省局复核', '批准启动限产措施', '按方案执行']) : ''
+    };
+  });
+
+  const ruleMeta = alertData?.ruleMeta || {
+    triggerDays: type === 'inventory' ? 7 : 1,
+    threshold,
+    currentValue: metrics[metrics.length - 1]?.value || threshold,
+    unit: '%',
+    exceededDays
+  };
+
   return {
-    id: _alertId,
+    id: alertId,
     metrics,
-    approvals: [
-      { role: '企业负责人', user: '张经理', time: formatDateTime(randomDateTime(date().subtract(3, 'day'), date().subtract(2, 'day'))).slice(0, 16), status: 'approved', comment: '情况属实，报请上级审批' },
-      { role: '市局监管员', user: '李主任', time: formatDateTime(randomDateTime(date().subtract(2, 'day'), date().subtract(1, 'day'))).slice(0, 16), status: 'approved', comment: '同意处理方案，转省局' },
-      { role: '省局审批', user: '王处长', time: null, status: 'pending', comment: '' }
-    ],
+    approvals,
     logs: Array.from({ length: 8 }, (_, i) => ({
       time: formatDateTime(date().subtract(i * 6, 'hour')),
-      user: randomPick(['系统', '张经理', '李主任', '王处长', '赵工']),
-      action: randomPick(['创建预警记录', '上传质检报告', '更新预警状态', '提交审批申请', '添加备注', '修改处理方案', '审批通过', '查看详情']),
-      detail: randomPick(['系统自动触发', '经现场核查确认', '按规定流程办理', '需要进一步评估', ''])
+      user: randomPick(['系统', '张总监', '李经理', '王处长', '赵工']),
+      action: i === 0 ? (type === 'inventory' ? '库存积压预警触发' : '质量抽检不合格预警触发') : randomPick(['创建预警记录', '上传质检报告', '更新预警状态', '提交审批申请', '添加备注', '修改处理方案', '审批通过', '查看详情']),
+      detail: i === 0 ? `连续${ruleMeta.exceededDays}天${type === 'inventory' ? '超安全水位' : '不合格率超阈值'}` : randomPick(['系统自动触发', '经现场核查确认', '按规定流程办理', '需要进一步评估', ''])
     })),
-    description: '本批次产品经抽样检测，关键指标超出国家标准阈值范围，建议立即采取限产或召回措施，防止问题产品流入市场造成安全隐患。',
+    description: alertData?.description || '本批次产品经抽样检测，关键指标超出国家标准阈值范围，建议立即采取限产或召回措施，防止问题产品流入市场造成安全隐患。',
     batchNo: `BATCH-${randomInt(100000, 999999)}`,
     productCount: randomInt(100, 5000),
-    affectedArea: randomPick(['华东地区', '华北地区', '全国范围', '部分省市'])
+    affectedArea: randomPick(['华东地区', '华北地区', '全国范围', '部分省市']),
+    ruleMeta,
+    isLevel2
+  };
+};
+
+export const generateForecastByPlan = (targets: Array<{ brandName: string; alcoholDegree: number; targetOutput: number; month: string }>) => {
+  const totalTarget = targets.reduce((s, t) => s + t.targetOutput, 0);
+  const avgTarget = targets.length > 0 ? totalTarget / targets.length : 5000;
+  const days = 90;
+  const result: ForecastDay[] = [];
+  const start = date().add(1, 'day');
+  let base = avgTarget * 0.8;
+  let inventory = avgTarget * 1.2;
+
+  for (let i = 0; i < days; i++) {
+    const seasonalFactor = 1 + Math.sin((i + 30) / 45) * 0.15;
+    const targetFactor = 1 + (totalTarget / 50000 - 1) * 0.3;
+    base = roundTo(base * randomFloat(0.97, 1.03) * seasonalFactor * targetFactor);
+    const variance = base * randomFloat(0.08, 0.15);
+    const forecastSales = roundTo(base * randomFloat(0.92, 1.02));
+    const plannedProduction = Math.round(forecastSales * randomFloat(0.98, 1.05));
+    inventory = Math.max(0, inventory + plannedProduction - forecastSales);
+
+    result.push({
+      date: formatDate(start.add(i, 'day')),
+      forecastProduction: plannedProduction,
+      forecastSales,
+      forecastRevenue: roundTo(plannedProduction * randomFloat(6, 9)),
+      lowerBound: roundTo(base - variance),
+      upperBound: roundTo(base + variance),
+      confidence: roundTo(randomFloat(82, 97, 1)),
+    });
+  }
+
+  const totalForecastSales = result.reduce((s, r) => s + r.forecastSales, 0);
+  const totalPlanned = result.reduce((s, r) => s + r.forecastProduction, 0);
+  const gap = totalPlanned - totalForecastSales;
+  const avgInventory = Math.round(inventory);
+
+  return {
+    forecastDays: result,
+    totalTarget,
+    totalForecastSales,
+    gap,
+    avgInventory,
+    safeDays: Math.round(avgInventory / (totalForecastSales / days)),
+    replenishmentPoint: Math.round(avgTarget * 0.7),
+    replenishmentQty: Math.round(avgTarget * 0.9),
+    turnoverRate: roundTo((totalForecastSales / avgInventory) * 4, 1),
+    suggestions: [
+      { priority: '高', text: `根据${targets.length}个品牌的计划产量，建议${gap > 0 ? '适度控量' : '加大生产'}，调整幅度${Math.abs(gap / totalTarget * 100).toFixed(1)}%` },
+      { priority: '高', text: `与经销商签订淡旺季动态备货协议，覆盖${targets.map(t => t.brandName).slice(0, 3).join('、')}等核心品牌` },
+      { priority: '中', text: `引入JIT配送模式降低区域仓库存水位15%，优化${targets.filter(t => t.alcoholDegree >= 50).length}款高度酒周转` },
+      { priority: '中', text: '建立跨区域调拨机制平衡南北供需差异' },
+      { priority: '低', text: 'Q3末启动节前促销活动加速库存消化' },
+    ],
+    gapAnalysis: [
+      `未来90天内预计${gap > 0 ? '供给过剩' : '市场缺口'}${Math.abs(gap).toLocaleString()}千升`,
+      `预测平衡日期约在${dayjs().add(Math.abs(gap) / (totalForecastSales / days), 'day').format('YYYY-MM-DD')}`,
+      `${targets.length > 3 ? '多品牌组合' : '单一品牌'}生产计划${gap > 0 ? '建议适度下调' : '需追加产能'}，匹配${targets.map(t => t.alcoholDegree + '°').join('/')}酒精度结构`,
+    ]
   };
 };

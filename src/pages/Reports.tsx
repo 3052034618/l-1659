@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Card,
   List,
@@ -32,6 +32,9 @@ import {
 import ReactECharts from 'echarts-for-react';
 import dayjs from 'dayjs';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/router';
+import { canViewProvince, canViewCity } from '@/utils/permission';
+import { PROVINCES } from '@/constants/regions';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -45,6 +48,8 @@ interface WeeklyReport {
   generatedAt: string;
   scope: 'national' | 'provincial' | 'municipal';
   regionName?: string;
+  provinceCode?: string;
+  cityCode?: string;
   status: 'generated' | 'generating' | 'draft';
 }
 
@@ -63,6 +68,16 @@ const generateMockReports = (): WeeklyReport[] => {
   for (let i = 0; i < 12; i++) {
     const scopeInfo = scopes[i % scopes.length];
     const startDate = dayjs().subtract(i * 7, 'day');
+    let provinceCode: string | undefined;
+    let cityCode: string | undefined;
+    if (scopeInfo.name) {
+      const prov = PROVINCES.find(p => p.name === scopeInfo.name || p.cities.some(c => c.name === scopeInfo.name));
+      if (prov) {
+        provinceCode = prov.code;
+        const city = prov.cities.find(c => c.name === scopeInfo.name);
+        if (city) cityCode = city.code;
+      }
+    }
     reports.push({
       id: `RPT-${2026}${String(24 - i).padStart(3, '0')}`,
       reportNo: `WINE-ANNUAL-2026-W${String(24 - i).padStart(2, '0')}`,
@@ -73,6 +88,8 @@ const generateMockReports = (): WeeklyReport[] => {
       generatedAt: startDate.add(7, 'day').add(2, 'hour').format('YYYY-MM-DD HH:mm'),
       scope: scopeInfo.scope,
       regionName: scopeInfo.name,
+      provinceCode,
+      cityCode,
       status: i === 0 ? 'generating' : 'generated',
     });
   }
@@ -338,7 +355,22 @@ const QualityRankList: React.FC = () => {
 };
 
 export default function Reports() {
-  const [reports] = useState<WeeklyReport[]>(generateMockReports());
+  const { user } = useAuth();
+  const rawReports = useMemo(() => generateMockReports(), []);
+  const reports = useMemo(() => {
+    return rawReports.filter(r => {
+      if (r.scope === 'national') {
+        return canViewProvince(user, '110000');
+      }
+      if (r.provinceCode) {
+        if (r.cityCode) {
+          return canViewCity(user, r.cityCode, r.provinceCode);
+        }
+        return canViewProvince(user, r.provinceCode);
+      }
+      return true;
+    });
+  }, [rawReports, user]);
   const [selectedReport, setSelectedReport] = useState<WeeklyReport | null>(null);
   const [drawerVisible, setDrawerVisible] = useState(false);
 

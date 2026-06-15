@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Card,
   Table,
@@ -41,6 +41,9 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/router';
+import { canViewProvince, canViewCity } from '@/utils/permission';
+import { PROVINCES } from '@/constants/regions';
 
 const { Title, Text, Paragraph } = Typography;
 const { Search } = Input;
@@ -53,7 +56,9 @@ interface Enterprise {
   creditCode: string;
   legalPerson: string;
   province: string;
+  provinceCode: string;
   city: string;
+  cityCode: string;
   productionScale: 'small' | 'medium' | 'large';
   mainProducts: string[];
   dataAccessStatus: 'connected' | 'partial' | 'disconnected';
@@ -66,31 +71,6 @@ interface Enterprise {
   alerts: { id: string; level: 1 | 2; title: string; time: string; status: string }[];
   timeline: { time: string; action: string; color: string }[];
 }
-
-const PROVINCES = [
-  '北京市', '天津市', '河北省', '山西省', '内蒙古自治区',
-  '辽宁省', '吉林省', '黑龙江省', '上海市', '江苏省',
-  '浙江省', '安徽省', '福建省', '江西省', '山东省',
-  '河南省', '湖北省', '湖南省', '广东省', '广西壮族自治区',
-  '海南省', '重庆市', '四川省', '贵州省', '云南省',
-  '西藏自治区', '陕西省', '甘肃省', '青海省', '宁夏回族自治区',
-  '新疆维吾尔自治区',
-];
-
-const PROVINCE_CITIES: Record<string, string[]> = {
-  '四川省': ['成都市', '绵阳市', '德阳市', '宜宾市', '泸州市'],
-  '贵州省': ['贵阳市', '遵义市', '六盘水市', '安顺市'],
-  '江苏省': ['南京市', '苏州市', '无锡市', '徐州市', '常州市'],
-  '山东省': ['济南市', '青岛市', '烟台市', '潍坊市', '临沂市'],
-  '山西省': ['太原市', '临汾市', '吕梁市', '晋中市'],
-  '安徽省': ['合肥市', '亳州市', '蚌埠市', '阜阳市'],
-  '陕西省': ['西安市', '宝鸡市', '咸阳市'],
-  '湖北省': ['武汉市', '宜昌市', '襄阳市'],
-  '湖南省': ['长沙市', '常德市', '岳阳市'],
-  '北京市': ['东城区', '西城区', '朝阳区', '海淀区', '丰台区'],
-  '上海市': ['黄浦区', '徐汇区', '长宁区', '浦东新区', '闵行区'],
-  '广东省': ['广州市', '深圳市', '佛山市', '东莞市'],
-};
 
 const BRAND_LIBRARY = [
   '茅台飞天', '五粮液', '国窖1573', '剑南春', '汾酒青花',
@@ -107,8 +87,7 @@ const generateMockEnterprises = (): Enterprise[] => {
 
   for (let i = 0; i < 56; i++) {
     const province = PROVINCES[i % PROVINCES.length];
-    const cities = PROVINCE_CITIES[province] || ['市辖区'];
-    const city = cities[i % cities.length];
+    const city = province.cities[i % province.cities.length];
     const status = statuses[i % statuses.length];
     const rating = ratings[i % ratings.length];
     const scale = scales[i % scales.length];
@@ -125,10 +104,12 @@ const generateMockEnterprises = (): Enterprise[] => {
         '四川郎酒集团有限责任公司',
         '江苏洋河酒厂股份有限公司',
       ][i % 6] + ` (${i + 1}号厂)`,
-      creditCode: `91${['510000', '520000', '320000', '370000', '110000', '310000'][i % 6]}${String(100000 + i * 137).padStart(10, '0')}`,
+      creditCode: `91${province.code.slice(0, 6)}${String(100000 + i * 137).padStart(10, '0')}`,
       legalPerson: ['李保芳', '曾从钦', '刘淼', '谭忠豹', '汪俊林', '张联东'][i % 6],
-      province,
-      city,
+      province: province.name,
+      provinceCode: province.code,
+      city: city.name,
+      cityCode: city.code,
       productionScale: scale,
       mainProducts,
       dataAccessStatus: status,
@@ -137,7 +118,7 @@ const generateMockEnterprises = (): Enterprise[] => {
         ? dayjs().subtract(i * 3, 'hour').subtract(i * 17, 'minute').format('YYYY-MM-DD HH:mm:ss')
         : dayjs().subtract(i + 3, 'day').format('YYYY-MM-DD HH:mm:ss'),
       registeredAt: dayjs().subtract(5 + i, 'year').format('YYYY-MM-DD'),
-      address: `${province}${city}经济开发区xx路${100 + i}号`,
+      address: `${province.name}${city.name}经济开发区xx路${100 + i}号`,
       alertCount: Math.floor(Math.random() * 8),
       dataItems: [
         { name: '生产数据接口', status: 'normal', lastSync: '2分钟前' },
@@ -165,7 +146,12 @@ const generateMockEnterprises = (): Enterprise[] => {
 };
 
 export default function Enterprises() {
-  const [allEnterprises] = useState<Enterprise[]>(generateMockEnterprises());
+  const { user } = useAuth();
+  const rawEnterprises = useMemo(() => generateMockEnterprises(), []);
+  const allEnterprises = useMemo(() => {
+    return rawEnterprises.filter(e => canViewProvince(user, e.provinceCode) && canViewCity(user, e.cityCode, e.provinceCode));
+  }, [rawEnterprises, user]);
+
   const [filteredData, setFilteredData] = useState<Enterprise[]>(allEnterprises);
   const [selectedEnterprise, setSelectedEnterprise] = useState<Enterprise | null>(null);
   const [drawerVisible, setDrawerVisible] = useState(false);
@@ -174,6 +160,10 @@ export default function Enterprises() {
   const [selectedStatus, setSelectedStatus] = useState<Enterprise['dataAccessStatus'] | undefined>();
   const [selectedRating, setSelectedRating] = useState<Enterprise['creditRating'] | undefined>();
   const [searchText, setSearchText] = useState('');
+
+  useEffect(() => {
+    setFilteredData(allEnterprises);
+  }, [allEnterprises]);
 
   const applyFilters = (
     province?: string,
@@ -482,8 +472,8 @@ export default function Enterprises() {
               optionFilterProp="label"
             >
               {PROVINCES.map((p) => (
-                <Option key={p} value={p} label={p}>
-                  {p}
+                <Option key={p.name} value={p.name} label={p.name}>
+                  {p.name}
                 </Option>
               ))}
             </Select>
@@ -500,9 +490,9 @@ export default function Enterprises() {
                 applyFilters(selectedProvince, v, selectedStatus, selectedRating, searchText);
               }}
             >
-              {(PROVINCE_CITIES[selectedProvince || ''] || []).map((c) => (
-                <Option key={c} value={c}>
-                  {c}
+              {(PROVINCES.find(p => p.name === selectedProvince)?.cities || []).map((c) => (
+                <Option key={c.name} value={c.name}>
+                  {c.name}
                 </Option>
               ))}
             </Select>

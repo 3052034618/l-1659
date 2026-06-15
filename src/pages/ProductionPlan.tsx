@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
   Card,
   Upload,
@@ -28,6 +28,8 @@ import * as XLSX from 'xlsx';
 import ReactECharts from 'echarts-for-react';
 import dayjs from 'dayjs';
 import { cn } from '@/lib/utils';
+import { generateForecastByPlan } from '@/utils/mock';
+import type { ForecastDay } from '@/types';
 
 const { Title, Text, Paragraph } = Typography;
 const { Dragger } = Upload;
@@ -38,15 +40,6 @@ interface MonthlyTarget {
   brandName: string;
   alcoholDegree: number;
   targetOutput: number;
-}
-
-interface ForecastDay {
-  date: string;
-  predictedSales: number;
-  lowerBound: number;
-  upperBound: number;
-  plannedProduction: number;
-  inventoryLevel: number;
 }
 
 const BRAND_LIBRARY = [
@@ -60,170 +53,135 @@ const BRAND_LIBRARY = [
   { name: '郎酒青花郎', degree: 53 },
 ];
 
-const generateMockForecast = (): ForecastDay[] => {
-  const data: ForecastDay[] = [];
-  const today = dayjs();
-  let inventory = 5000;
+interface ForecastPoint {
+  date: string;
+  value: number;
+  lower: number;
+  upper: number;
+}
 
-  for (let i = 30; i >= 1; i--) {
-    const date = today.subtract(i, 'day');
-    const baseSales = 4000 + Math.random() * 800;
-    inventory = inventory + 4200 - baseSales;
-    data.push({
-      date: date.format('MM-DD'),
-      predictedSales: Math.round(baseSales),
-      lowerBound: Math.round(baseSales * 0.9),
-      upperBound: Math.round(baseSales * 1.1),
-      plannedProduction: 4200 + Math.round(Math.random() * 400),
-      inventoryLevel: Math.max(0, Math.round(inventory)),
+const ForecastChart: React.FC<{ history: ForecastPoint[]; forecast: ForecastPoint[] }> = ({ history, forecast }) => {
+  const option = useMemo(() => {
+    const xData: string[] = [];
+    const historyVals: Array<number | null> = [];
+    const forecastVals: Array<number | null> = [];
+    const lowerVals: Array<number | null> = [];
+    const upperVals: Array<number | null> = [];
+    const bandBase: Array<number | null> = [];
+    const bandRange: Array<number | null> = [];
+
+    history.forEach((p) => {
+      xData.push(p.date);
+      historyVals.push(p.value);
+      forecastVals.push(null);
+      lowerVals.push(null);
+      upperVals.push(null);
+      bandBase.push(null);
+      bandRange.push(null);
     });
-  }
 
-  for (let i = 0; i < 90; i++) {
-    const date = today.add(i, 'day');
-    const trendFactor = 1 + Math.sin(i / 30) * 0.1 + i * 0.002;
-    const baseSales = (4200 + Math.random() * 600) * trendFactor;
-    const production = 4400 + Math.round(Math.sin(i / 14) * 300);
-    inventory = inventory + production - baseSales;
-    data.push({
-      date: date.format('MM-DD'),
-      predictedSales: Math.round(baseSales),
-      lowerBound: Math.round(baseSales * (0.85 + Math.random() * 0.05)),
-      upperBound: Math.round(baseSales * (1.05 + Math.random() * 0.1)),
-      plannedProduction: production,
-      inventoryLevel: Math.max(0, Math.round(inventory)),
+    forecast.forEach((p) => {
+      xData.push(p.date);
+      historyVals.push(null);
+      forecastVals.push(p.value);
+      lowerVals.push(p.lower);
+      upperVals.push(p.upper);
+      bandBase.push(p.lower);
+      bandRange.push(p.upper - p.lower);
     });
-  }
 
-  return data;
-};
-
-const ForecastChart: React.FC<{ data: ForecastDay[] }> = ({ data }) => {
-  const option = {
-    backgroundColor: 'transparent',
-    tooltip: {
-      trigger: 'axis',
-      backgroundColor: 'rgba(17, 24, 39, 0.95)',
-      borderColor: '#D4A574',
-      borderWidth: 1,
-      textStyle: { color: '#F3F4F6' },
-    },
-    legend: {
-      data: ['历史销量', '预测销量', '计划产量', '库存水平'],
-      textStyle: { color: '#9CA3AF' },
-      top: 0,
-    },
-    grid: {
-      left: '3%',
-      right: '4%',
-      bottom: '3%',
-      top: '12%',
-      containLabel: true,
-    },
-    xAxis: {
-      type: 'category',
-      boundaryGap: false,
-      data: data.map((d) => d.date),
-      axisLine: { lineStyle: { color: '#374151' } },
-      axisLabel: { color: '#9CA3AF', interval: 14 },
-      splitLine: { lineStyle: { color: 'rgba(55, 65, 81, 0.5)' } },
-    },
-    yAxis: [
-      {
-        type: 'value',
-        name: '数量(千升)',
-        nameTextStyle: { color: '#9CA3AF' },
+    return {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: 'rgba(17, 24, 39, 0.95)',
+        borderColor: '#D4A574',
+        borderWidth: 1,
+        textStyle: { color: '#F3F4F6' },
+      },
+      legend: {
+        data: ['历史销量', '预测销量', '置信区间'],
+        textStyle: { color: '#9CA3AF' },
+        top: 0,
+      },
+      grid: {
+        left: '3%',
+        right: '4%',
+        bottom: '3%',
+        top: '12%',
+        containLabel: true,
+      },
+      xAxis: {
+        type: 'category',
+        boundaryGap: false,
+        data: xData,
         axisLine: { lineStyle: { color: '#374151' } },
-        axisLabel: { color: '#9CA3AF' },
+        axisLabel: { color: '#9CA3AF', interval: 14 },
         splitLine: { lineStyle: { color: 'rgba(55, 65, 81, 0.5)' } },
       },
-    ],
-    series: [
-      {
-        name: '历史销量',
-        type: 'line',
-        smooth: true,
-        data: data.slice(0, 30).map((d) => d.predictedSales),
-        lineStyle: { color: '#3B82F6', width: 2 },
-        itemStyle: { color: '#3B82F6' },
-        areaStyle: {
-          color: {
-            type: 'linear',
-            x: 0,
-            y: 0,
-            x2: 0,
-            y2: 1,
-            colorStops: [
-              { offset: 0, color: 'rgba(59, 130, 246, 0.3)' },
-              { offset: 1, color: 'rgba(59, 130, 246, 0.05)' },
-            ],
+      yAxis: [
+        {
+          type: 'value',
+          name: '数量(千升)',
+          nameTextStyle: { color: '#9CA3AF' },
+          axisLine: { lineStyle: { color: '#374151' } },
+          axisLabel: { color: '#9CA3AF' },
+          splitLine: { lineStyle: { color: 'rgba(55, 65, 81, 0.5)' } },
+        },
+      ],
+      series: [
+        {
+          name: '置信区间下限',
+          type: 'line',
+          data: bandBase,
+          stack: 'confidence',
+          lineStyle: { opacity: 0 },
+          symbol: 'none',
+        },
+        {
+          name: '置信区间',
+          type: 'line',
+          data: bandRange,
+          stack: 'confidence',
+          lineStyle: { opacity: 0 },
+          symbol: 'none',
+          areaStyle: { color: 'rgba(59, 130, 246, 0.15)' },
+        },
+        {
+          name: '历史销量',
+          type: 'line',
+          smooth: true,
+          data: historyVals,
+          lineStyle: { color: '#D4A574', width: 3 },
+          itemStyle: { color: '#D4A574' },
+          areaStyle: {
+            color: {
+              type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+              colorStops: [
+                { offset: 0, color: 'rgba(212, 165, 116, 0.3)' },
+                { offset: 1, color: 'rgba(212, 165, 116, 0.05)' },
+              ],
+            },
+          },
+          markLine: {
+            silent: true,
+            symbol: 'none',
+            lineStyle: { color: '#D4A574', type: 'dashed' },
+            data: [{ xAxis: history.length - 1 }],
+            label: { formatter: '今日', color: '#D4A574' },
           },
         },
-        markLine: {
-          silent: true,
-          symbol: 'none',
-          lineStyle: { color: '#D4A574', type: 'dashed' },
-          data: [{ xAxis: 29 }],
-          label: { formatter: '今日', color: '#D4A574' },
+        {
+          name: '预测销量',
+          type: 'line',
+          smooth: true,
+          data: forecastVals,
+          lineStyle: { color: '#3B82F6', width: 2, type: 'dashed' },
+          itemStyle: { color: '#3B82F6' },
         },
-      },
-      {
-        name: '预测销量',
-        type: 'line',
-        smooth: true,
-        data: [
-          ...new Array(29).fill(null),
-          data[29]?.predictedSales,
-          ...data.slice(30).map((d) => d.predictedSales),
-        ],
-        lineStyle: { color: '#D4A574', width: 2, type: 'dashed' },
-        itemStyle: { color: '#D4A574' },
-      },
-      {
-        name: '预测区间',
-        type: 'line',
-        data: [
-          ...new Array(29).fill(null),
-          ...data.slice(29).map((d) => d.upperBound),
-        ],
-        lineStyle: { opacity: 0 },
-        stack: 'confidence',
-        symbol: 'none',
-      },
-      {
-        name: '预测区间下限',
-        type: 'line',
-        data: [
-          ...new Array(29).fill(null),
-          ...data.slice(29).map((d) => d.lowerBound),
-        ],
-        lineStyle: { opacity: 0 },
-        areaStyle: {
-          color: 'rgba(212, 165, 116, 0.15)',
-        },
-        stack: 'confidence',
-        symbol: 'none',
-      },
-      {
-        name: '计划产量',
-        type: 'bar',
-        data: data.map((d) => d.plannedProduction),
-        itemStyle: {
-          color: 'rgba(16, 185, 129, 0.5)',
-          borderRadius: [2, 2, 0, 0],
-        },
-        barWidth: 4,
-      },
-      {
-        name: '库存水平',
-        type: 'line',
-        smooth: true,
-        data: data.map((d) => d.inventoryLevel),
-        lineStyle: { color: '#8B5CF6', width: 2 },
-        itemStyle: { color: '#8B5CF6' },
-      },
-    ],
-  };
+      ],
+    };
+  }, [history, forecast]);
 
   return (
     <ReactECharts
@@ -255,9 +213,37 @@ export default function ProductionPlan() {
   const [monthlyTargets, setMonthlyTargets] = useState<MonthlyTarget[]>(
     generateMockMonthlyTargets()
   );
-  const [forecastData] = useState<ForecastDay[]>(generateMockForecast());
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const forecastResult = useMemo(() => {
+    return generateForecastByPlan(monthlyTargets.map(t => ({
+      brandName: t.brandName,
+      alcoholDegree: t.alcoholDegree,
+      targetOutput: t.targetOutput,
+      month: t.month
+    })));
+  }, [monthlyTargets]);
+
+  const chartData = useMemo(() => {
+    const history = Array.from({ length: 30 }, (_, i) => {
+      const d = dayjs().subtract(30 - i, 'day');
+      const base = forecastResult.avgInventory * 0.8;
+      return {
+        date: d.format('MM-DD'),
+        value: Math.round(base * (0.9 + Math.random() * 0.2)),
+        lower: Math.round(base * 0.85),
+        upper: Math.round(base * 1.15),
+      };
+    });
+    const forecast = forecastResult.forecastDays.map((f, idx) => ({
+      date: dayjs(f.date).format('MM-DD'),
+      value: f.forecastSales,
+      lower: f.lowerBound,
+      upper: f.upperBound,
+    }));
+    return { history, forecast };
+  }, [forecastResult]);
 
   const handleFileParse = (file: File) => {
     setUploading(true);
@@ -469,7 +455,7 @@ export default function ProductionPlan() {
         }
         extra={<Tag color="blue">历史30天 + 未来90天</Tag>}
       >
-        <ForecastChart data={forecastData} />
+        <ForecastChart history={chartData.history} forecast={chartData.forecast} />
       </Card>
 
       <Row gutter={16}>
@@ -485,21 +471,27 @@ export default function ProductionPlan() {
           >
             <Row gutter={16} className="mb-4">
               <Col span={12}>
-                <div className="p-4 rounded-lg bg-red-500/10 border border-red-500/30">
-                  <div className="text-xs text-red-400 mb-1">预测缺口量</div>
-                  <div className="text-2xl font-bold text-red-400">
-                    -12,580 <span className="text-sm font-normal">千升</span>
+                <div className={`p-4 rounded-lg ${forecastResult.gap > 0 ? 'bg-red-500/10 border border-red-500/30' : 'bg-emerald-500/10 border border-emerald-500/30'}`}>
+                  <div className={`text-xs ${forecastResult.gap > 0 ? 'text-red-400' : 'text-emerald-400'} mb-1`}>
+                    {forecastResult.gap > 0 ? '预测过剩量' : '预测缺口量'}
                   </div>
-                  <div className="text-xs text-gray-500 mt-1">供大于求</div>
+                  <div className={`text-2xl font-bold ${forecastResult.gap > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {forecastResult.gap > 0 ? '+' : ''}{Math.abs(forecastResult.gap).toLocaleString()} <span className="text-sm font-normal">千升</span>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {forecastResult.gap > 0 ? '供大于求' : '供不应求'}
+                  </div>
                 </div>
               </Col>
               <Col span={12}>
                 <div className="p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
                   <div className="text-xs text-emerald-400 mb-1">预计平衡日期</div>
                   <div className="text-2xl font-bold text-emerald-400">
-                    {dayjs().add(45, 'day').format('YYYY-MM-DD')}
+                    {dayjs().add(Math.abs(forecastResult.gap) / (forecastResult.totalForecastSales / 90), 'day').format('YYYY-MM-DD')}
                   </div>
-                  <div className="text-xs text-gray-500 mt-1">约6.5周后</div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    约{Math.round(Math.abs(forecastResult.gap) / (forecastResult.totalForecastSales / 90 / 7))}周后
+                  </div>
                 </div>
               </Col>
             </Row>
@@ -509,12 +501,7 @@ export default function ProductionPlan() {
             </Paragraph>
             <List
               size="small"
-              dataSource={[
-                '未来30天内高端白酒市场预计出现12.6%供给过剩',
-                '中端白酒需求平稳，建议维持现有生产节奏',
-                '9月中秋旺季前需在7月底前完成补库计划',
-                '茅台、五粮液等头部品牌库存周转偏慢，建议适度控量',
-              ]}
+              dataSource={forecastResult.gapAnalysis}
               renderItem={(item) => (
                 <List.Item style={{ borderBottom: 'none', padding: '4px 0' }}>
                   <Text type="secondary">
@@ -541,7 +528,7 @@ export default function ProductionPlan() {
                 <div className="text-center p-3 rounded-lg bg-ink-surface/60">
                   <div className="text-xs text-gray-400 mb-1">安全天数</div>
                   <div className="text-xl font-bold" style={{ color: '#D4A574' }}>
-                    28<span className="text-xs">天</span>
+                    {forecastResult.safeDays}<span className="text-xs">天</span>
                   </div>
                 </div>
               </Col>
@@ -549,7 +536,7 @@ export default function ProductionPlan() {
                 <div className="text-center p-3 rounded-lg bg-ink-surface/60">
                   <div className="text-xs text-gray-400 mb-1">补货点</div>
                   <div className="text-xl font-bold text-blue-400">
-                    3,800<span className="text-xs">千升</span>
+                    {forecastResult.replenishmentPoint.toLocaleString()}<span className="text-xs">千升</span>
                   </div>
                 </div>
               </Col>
@@ -557,7 +544,7 @@ export default function ProductionPlan() {
                 <div className="text-center p-3 rounded-lg bg-ink-surface/60">
                   <div className="text-xs text-gray-400 mb-1">补货量</div>
                   <div className="text-xl font-bold text-emerald-400">
-                    5,200<span className="text-xs">千升</span>
+                    {forecastResult.replenishmentQty.toLocaleString()}<span className="text-xs">千升</span>
                   </div>
                 </div>
               </Col>
@@ -565,7 +552,7 @@ export default function ProductionPlan() {
                 <div className="text-center p-3 rounded-lg bg-ink-surface/60">
                   <div className="text-xs text-gray-400 mb-1">周转率</div>
                   <div className="text-xl font-bold text-purple-400">
-                    12.4<span className="text-xs">次/年</span>
+                    {forecastResult.turnoverRate}<span className="text-xs">次/年</span>
                   </div>
                 </div>
               </Col>
@@ -579,13 +566,7 @@ export default function ProductionPlan() {
                 borderColor: '#374151',
                 background: 'rgba(17, 24, 39, 0.3)',
               }}
-              dataSource={[
-                { priority: '高', text: '优化SKU结构，停产2款低效产品释放产能' },
-                { priority: '高', text: '与经销商签订淡旺季动态备货协议' },
-                { priority: '中', text: '引入JIT配送模式降低区域仓库存水位15%' },
-                { priority: '中', text: '建立跨区域调拨机制平衡南北供需差异' },
-                { priority: '低', text: 'Q3末启动节前促销活动加速库存消化' },
-              ]}
+              dataSource={forecastResult.suggestions}
               renderItem={(item) => (
                 <List.Item
                   style={{ borderBottomColor: '#374151', padding: '8px 12px' }}

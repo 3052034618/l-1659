@@ -4,6 +4,7 @@ export type RoleType =
   | 'province_manager'
   | 'city_manager'
   | 'quality_inspector'
+  | 'production_manager'
   | 'auditor'
   | 'viewer';
 
@@ -152,16 +153,16 @@ export const ROLES: RoleDefinition[] = [
 ];
 
 export const ALERT_THRESHOLDS: AlertThreshold = {
-  qualityIssueRate: 2.0,
+  qualityIssueRate: 3.0,
   productionDecline: 15.0,
-  inventoryOverstock: 150.0,
+  inventoryOverstock: 120.0,
   inventoryShortage: 30.0,
   satisfactionDrop: 8.0,
 };
 
 export const APPROVAL_CONFIG: ApprovalConfig = {
   alertApprovalRequired: true,
-  alertApprovalLevels: 2,
+  alertApprovalLevels: 3,
   planApprovalRequired: true,
   planApprovalLevels: 3,
   autoApproveLowRisk: true,

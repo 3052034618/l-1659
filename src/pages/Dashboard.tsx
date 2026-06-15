@@ -33,7 +33,9 @@ import {
   generateTrendData,
   generateDataStream,
   generateProvinceDetail,
+  generateProvinceTrend,
 } from '@/utils/mock';
+import { canViewProvince } from '@/utils/permission';
 
 type MapDimension = 'sales' | 'production' | 'quality';
 
@@ -60,10 +62,14 @@ export default function Dashboard() {
   const [autoRefresh, setAutoRefresh] = useState(true);
 
   const kpiData = useMemo(() => generateKPI(), []);
-  const provinceRawData = useMemo(() => generateProvinceData(), []);
+  const allProvinceData = useMemo(() => generateProvinceData(), []);
   const qualityRank = useMemo(() => generateQualityRank(), []);
   const trendData = useMemo(() => generateTrendData(7), []);
   const _streamData = useMemo(() => generateDataStream(15), []);
+
+  const provinceRawData = useMemo(() => {
+    return allProvinceData.filter((p: any) => canViewProvince(user, p.code));
+  }, [allProvinceData, user]);
 
   const heatmapData = useMemo(() => {
     return provinceRawData.map((p: any) => ({
@@ -92,7 +98,7 @@ export default function Dashboard() {
   );
 
   const provinceTrend = useMemo(
-    () => (selectedProvince ? generateTrendData(7) : null),
+    () => (selectedProvince ? generateProvinceTrend(selectedProvince, 7) : null),
     [selectedProvince]
   );
 
@@ -105,8 +111,7 @@ export default function Dashboard() {
   }, [autoRefresh]);
 
   const handleProvinceClick = (code: string) => {
-    const province = provinceRawData.find((p: any) => p.code === code);
-    setSelectedProvince(province?.name || code);
+    setSelectedProvince(code);
     setDrawerOpen(true);
   };
 

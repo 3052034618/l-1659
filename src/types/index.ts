@@ -156,6 +156,14 @@ export type AlertStatus =
   | 'rejected'
   | 'closed';
 
+export interface AlertRuleMeta {
+  triggerDays: number;
+  threshold: number;
+  currentValue: number;
+  unit: string;
+  exceededDays: number;
+}
+
 export interface Alert {
   id: string;
   alertNo: string;
@@ -187,6 +195,7 @@ export interface Alert {
   currentApprovalLevel: number;
   actionPlans?: ActionPlan[];
   relatedAlerts?: string[];
+  ruleMeta?: AlertRuleMeta;
 }
 
 export interface AlertLog {
